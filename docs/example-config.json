@@ -1,0 +1,13 @@
+{
+  "manifest_directory": "",
+  "archive_directory": "",
+  "log_directory": "",
+  "tracked_directories": [
+    ""
+  ],
+  "blacklisted_directories": [
+    "RetroRPG/build"
+  ],
+  "aes_key": "",
+  "aes_iv": ""
+}

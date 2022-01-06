@@ -12,9 +12,11 @@ namespace BackTrack
     {
         public string manifest_directory { get; set; } = "./";
         public string archive_directory { get; set; } = "./";
-        public string archive_temp_directory { get; set; } = "./";
         public string log_directory { get; set; } = "./";
         public List<string> tracked_directories { get; set; } = new List<string>();
+        public List<string> blacklisted_directories { get; set; } = new List<string>();
+        public string aes_key { get; set; } = "";
+        public string aes_iv { get; set; } = "";
 
         public static Configuration loadConfiguration(string filePath)
         {
@@ -22,6 +24,7 @@ namespace BackTrack
             {
                 string rawJson = File.ReadAllText(filePath);
                 Configuration config = JsonConvert.DeserializeObject<Configuration>(rawJson);
+
                 return config;
             }
             catch (Exception e)

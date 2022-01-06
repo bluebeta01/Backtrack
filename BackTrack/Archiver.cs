@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO.Compression;
 using System.IO;
+using BackTrackArchiver;
 
 namespace BackTrack
 {
@@ -10,17 +11,24 @@ namespace BackTrack
         Configuration configuration;
         Manifest manifest;
         Manifest newManifest = new Manifest();
-        ZipArchive zipArchive;
         uint epochTime;
-        string zipArchiveTempPath;
+        Archive archive;
+        List<string> filesToArchive = new List<string>();
+        List<string> removedFiles = new List<string>();
 
-        private bool ArchiveFiles(string directory)
+        private void FindFilesToArchive(string directory, string rootDirectory)
         {
-            bool fileHasBeenArchived = false;
+            string s1 = Path.GetFullPath(directory);
+            foreach (string blacklistedDir in configuration.blacklisted_directories)
+            {
+                string s2 = Path.GetFullPath(rootDirectory + "/" + blacklistedDir);
+                if (s1 == s2)
+                    return;
+            }
 
             string[] dirs = Directory.GetDirectories(directory);
             foreach (string dir in dirs)
-                fileHasBeenArchived |= ArchiveFiles(dir);
+                FindFilesToArchive(dir, rootDirectory);
 
             string[] filenames = Directory.GetFiles(directory);
             foreach(string filename in filenames)
@@ -37,25 +45,16 @@ namespace BackTrack
                 else
                     shouldArchive = true;
 
-                if(shouldArchive)
-                {
-                    zipArchive.CreateEntryFromFile(filename, filename);
-                    fileHasBeenArchived = true;
-                }
+                if (shouldArchive)
+                    filesToArchive.Add(filename);
             }
-
-            return fileHasBeenArchived;
         }
 
-        private void SaveArchive()
-        {
-            File.Move(zipArchiveTempPath, configuration.archive_directory + "/" + epochTime + ".zip");
-        }
-
-        public Archiver(Configuration configuration, Manifest manifest)
+        public Archiver(Configuration configuration, Manifest manifest, Archive archive)
         {
             this.configuration = configuration;
             this.manifest = manifest;
+            this.archive = archive;
         }
 
         public Manifest ArchiveDirectories()
@@ -63,30 +62,17 @@ namespace BackTrack
             TimeSpan t = DateTime.UtcNow - new DateTime(1970, 1, 1);
             epochTime = (uint)t.TotalMilliseconds;
 
-            try
-            {
-                zipArchiveTempPath = configuration.archive_temp_directory + "/archive.temp";
-                if (File.Exists(zipArchiveTempPath))
-                    File.Delete(zipArchiveTempPath);
-                zipArchive = ZipFile.Open(zipArchiveTempPath, ZipArchiveMode.Create);
-            }
-            catch (Exception e)
-            {
+            foreach (string dir in configuration.tracked_directories)
+                FindFilesToArchive(dir, dir);
 
-            }
+            if (filesToArchive.Count == 0)
+                return manifest;
 
-            bool fileArchived = false;
-            foreach (string directory in configuration.tracked_directories)
-            {
-                fileArchived |= ArchiveFiles(directory);
-            }
+            foreach (KeyValuePair<string, uint> pair in manifest.tracked_files)
+                if (!File.Exists(pair.Key))
+                    removedFiles.Add(pair.Key);
 
-            zipArchive.Dispose();
-
-            if (!fileArchived)
-                File.Delete(zipArchiveTempPath);
-            else
-                SaveArchive();
+            archive.ArchiveFiles(filesToArchive.ToArray(), removedFiles.ToArray());
 
             return newManifest;
         }
