@@ -1,0 +1,2 @@
+-Modify bta file format to support optional encryption
+-Fix bug where each BTA gets a differnet guid

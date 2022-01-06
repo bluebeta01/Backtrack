@@ -4,6 +4,7 @@ ulong		epochTime
 uint		index
 uint		version
 byte[32]	aesKeyHash
+bool		encrypted
 int			removedFilesEncryptedSize
 int			removedFilesCount
 int			encryptedFileTableSize

@@ -11,11 +11,7 @@ namespace BackTrackArchiver
 {
     public class ArchiveFile
     {
-        public readonly uint magic = 0x46415442;
-        public Guid guid  = Guid.NewGuid();
-        public ulong epochTime = 0;
-        public uint index = 0;
-        public uint version = 1;
+        BtaHeader header = new BtaHeader();
         public List<string> addedFiles = new List<string>();
         public List<string> removedFiles = new List<string>();
         public List<FileTableEntry> fileTable = new List<FileTableEntry>();
@@ -27,21 +23,14 @@ namespace BackTrackArchiver
         public void Create(string filePath, uint index, Aes aes, string[] addedFiles, string[] removedFiles)
         {
             this.filePath = filePath;
-            this.index = index;
             this.aes = aes;
+            header.index = index;
 
             fileStream = File.Create(filePath);
+            fileStream.Seek(BtaHeader.headerSize, SeekOrigin.Begin);
             BinaryWriter binaryWriter = new BinaryWriter(fileStream);
-            binaryWriter.Write(magic);
-            binaryWriter.Write(guid.ToByteArray());
-            binaryWriter.Write(epochTime);
-            binaryWriter.Write(index);
-            binaryWriter.Write(version);
 
-            byte[] combinedKey = aes.IV.Concat(aes.Key).ToArray();
-            byte[] keyCheckValue = sha.ComputeHash(combinedKey);
-            binaryWriter.Write(keyCheckValue);
-
+            
 
             MemoryStream memStream = new MemoryStream();
             BinaryWriter memBinaryWriter = new BinaryWriter(memStream);
@@ -51,41 +40,16 @@ namespace BackTrackArchiver
             byte[] removedFilesEncrypted = AesCoder.encodeBytes(memStream.ToArray(), aes.Key, aes.IV);
 
 
-         
-
-            //Calculate the size that the encrypted filetable will be
-            int encryptedFileTableSize = 0;
-            foreach (string addedFile in addedFiles)
-                encryptedFileTableSize += addedFile.Length;
-            //Every string is prepended with an int to specify its length
-            encryptedFileTableSize += sizeof(uint) * addedFiles.Length;
-
-            encryptedFileTableSize += sizeof(ulong) * 5 * addedFiles.Length;
-            //Added padding so that the size is a multiple of 16 since it will be encrypted
-            encryptedFileTableSize += 16 - (encryptedFileTableSize % 16);
-
-            binaryWriter.Write(removedFilesEncrypted.Length);
-            binaryWriter.Write(removedFiles.Length);
-            binaryWriter.Write(encryptedFileTableSize);
-            binaryWriter.Write(addedFiles.Length);
-            binaryWriter.Write(removedFilesEncrypted);
-            long filetablePosition = binaryWriter.BaseStream.Position;
-            binaryWriter.BaseStream.Seek(filetablePosition + encryptedFileTableSize, SeekOrigin.Begin);
-
             foreach(string addedFile in addedFiles)
             {
                 Console.WriteLine("Archving File: " + addedFile);
                 BinaryReader reader = new BinaryReader(File.OpenRead(addedFile));
                 FileTableEntry entry = new FileTableEntry();
                 entry.name = addedFile;
-                entry.encryptedSize = 0;
-                entry.compressedSize = 0;
+                entry.lastModified = DateTimeToEpochTime(File.GetLastWriteTimeUtc(addedFile));
                 entry.uncompresedSize = (ulong)reader.BaseStream.Length;
-                entry.lastModified = 0;
                 entry.offset = (ulong)binaryWriter.BaseStream.Position;
                 fileTable.Add(entry);
-
-                
 
                 while(reader.BaseStream.Position < reader.BaseStream.Length)
                 {
@@ -118,8 +82,31 @@ namespace BackTrackArchiver
             }
             memBinaryWriter.Flush();
             byte[] encryptedFileTable = AesCoder.encodeBytes(memStream.ToArray(), aes.Key, aes.IV);
-            binaryWriter.BaseStream.Seek(filetablePosition, SeekOrigin.Begin);
+            long fileTableOffset = binaryWriter.BaseStream.Position;
             binaryWriter.Write(encryptedFileTable);
+            long removedFilesOffset = binaryWriter.BaseStream.Position;
+            binaryWriter.Write(removedFilesEncrypted);
+
+
+            //TODO: Set the guid to a passed in guid
+            header.epochTime = DateTimeToEpochTime(DateTime.UtcNow);
+            header.index = index;
+            header.version = 1;
+            header.encrypted = true;
+            header.aesKeyHash = GenerateKeyHash();
+            header.removedFilesCount = removedFiles.Length;
+            header.removedFilesEncryptedSize = removedFilesEncrypted.Length;
+            header.removedFilesOffset = removedFilesOffset;
+            header.fileTableEntryCount = fileTable.Count;
+            header.fileTableEncryptedSize = encryptedFileTable.Length;
+            header.fileTableOffset = fileTableOffset;
+
+            binaryWriter.BaseStream.Seek(0, SeekOrigin.Begin);
+            header.Write(binaryWriter, true);
+            binaryWriter.Flush();
+            binaryWriter.BaseStream.Seek(0, SeekOrigin.Begin);
+            header.WriteMagic(binaryWriter);
+            binaryWriter.Flush();
         }
 
         public void Open(string filePath, bool filetableOnly, Aes aes)
@@ -129,46 +116,51 @@ namespace BackTrackArchiver
 
             fileStream = File.Open(filePath, FileMode.Open);
             BinaryReader binaryReader = new BinaryReader(fileStream);
-            uint magic = binaryReader.ReadUInt32();
-            if (magic != this.magic)
+            header.Read(binaryReader);
+            if (!header.Validate())
                 throw new Exception("Not a valid archive file");
-            guid = new Guid(binaryReader.ReadBytes(16));
-            epochTime = binaryReader.ReadUInt64();
-            index = binaryReader.ReadUInt32();
-            version = binaryReader.ReadUInt32();
 
-            byte[] readKeyCheckValue = binaryReader.ReadBytes(32);
-            byte[] keyCheckValue = sha.ComputeHash(aes.IV.Concat(aes.Key).ToArray());
+            byte[] keyHash = GenerateKeyHash();
             for(int i = 0; i < 32; i++)
             {
-                if (readKeyCheckValue[i] != keyCheckValue[i])
+                if (keyHash[i] != header.aesKeyHash[i])
                     throw new Exception("Bad encryption key");
             }
 
-            int removedFilesLength = binaryReader.ReadInt32();
-            int removedFilesCount = binaryReader.ReadInt32();
-            int fileTableLength = binaryReader.ReadInt32();
-            int fileTableCount = binaryReader.ReadInt32();
-
-            decryptRemovedFiles(removedFilesLength, removedFilesCount);
-            decryptFiletable(fileTableLength, fileTableCount);
+            decryptRemovedFiles();
+            decryptFiletable();
         }
 
-        void decryptRemovedFiles(int length, int count)
+        byte[] GenerateKeyHash()
+        {
+            byte[] combinedKey = aes.IV.Concat(aes.Key).ToArray();
+            byte[] keyCheckValue = sha.ComputeHash(combinedKey);
+            return keyCheckValue;
+        }
+
+        uint DateTimeToEpochTime(DateTime dateTime)
+        {
+            TimeSpan t = dateTime - new DateTime(1970, 1, 1);
+            return ((uint)t.TotalMilliseconds);
+        }
+
+        void decryptRemovedFiles()
         {
             BinaryReader binaryReader = new BinaryReader(fileStream);
-            byte[] encryptedFileList = binaryReader.ReadBytes((int)length);
+            binaryReader.BaseStream.Seek(header.removedFilesOffset, SeekOrigin.Begin);
+            byte[] encryptedFileList = binaryReader.ReadBytes(header.removedFilesEncryptedSize);
             BinaryReader decryptReader = new BinaryReader(AesCoder.decodeBytes(encryptedFileList, aes.Key, aes.IV));
-            for(int i = 0; i < count; i++)
+            for(int i = 0; i < header.removedFilesCount; i++)
                 removedFiles.Add(decryptReader.ReadString());
         }
 
-        void decryptFiletable(int length, int count)
+        void decryptFiletable()
         {
             BinaryReader binaryReader = new BinaryReader(fileStream);
-            byte[] encryptedFileList = binaryReader.ReadBytes((int)length);
+            binaryReader.BaseStream.Seek(header.fileTableOffset, SeekOrigin.Begin);
+            byte[] encryptedFileList = binaryReader.ReadBytes(header.fileTableEncryptedSize);
             BinaryReader decryptReader = new BinaryReader(AesCoder.decodeBytes(encryptedFileList, aes.Key, aes.IV));
-            for(int i = 0; i < count; i++)
+            for(int i = 0; i < header.fileTableEntryCount; i++)
             {
                 FileTableEntry entry = new FileTableEntry();
                 entry.name = decryptReader.ReadString();

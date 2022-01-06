@@ -44,6 +44,7 @@
     <Compile Include="AesCoder.cs" />
     <Compile Include="Archive.cs" />
     <Compile Include="ArchiveFile.cs" />
+    <Compile Include="BtaHeader.cs" />
     <Compile Include="FileTableEntry.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

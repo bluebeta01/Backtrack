@@ -14,6 +14,8 @@ namespace BackTrackFileViewer
 {
     public partial class Form1 : Form
     {
+        GetDataForm dataForm = new GetDataForm();
+
         public Form1()
         {
             InitializeComponent();
@@ -21,11 +23,15 @@ namespace BackTrackFileViewer
 
         private void Form1_Load(object sender, EventArgs e)
         {
+            dataForm.ShowDialog();
+            if (dataForm.archiveDir == "" || dataForm.aesKey == "" || dataForm.aesIv == "")
+                return;
+
             Aes aes = Aes.Create();
-            aes.Key = Convert.FromBase64String("");
-            aes.IV = Convert.FromBase64String("");
-            Archive archive = new Archive("E:/backtrack_backups/archive", aes);
-            FileTableEntry[] files = archive.ListFilesInArchive(2);
+            aes.Key = Convert.FromBase64String(dataForm.aesKey);
+            aes.IV = Convert.FromBase64String(dataForm.aesIv);
+            Archive archive = new Archive(dataForm.archiveDir, aes);
+            FileTableEntry[] files = archive.ListFilesInArchive(0);
             foreach(FileTableEntry file in files)
             {
                 listBox1.Items.Add(file.name + "  " + file.uncompresedSize + "  ,  " + file.compressedSize);
