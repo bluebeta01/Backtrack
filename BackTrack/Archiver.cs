@@ -18,11 +18,10 @@ namespace BackTrack
 
         private void FindFilesToArchive(string directory, string rootDirectory)
         {
-            string s1 = Path.GetFullPath(directory);
             foreach (string blacklistedDir in configuration.blacklisted_directories)
             {
-                string s2 = Path.GetFullPath(rootDirectory + "/" + blacklistedDir);
-                if (s1 == s2)
+                string s2 = Path.GetFullPath(rootDirectory + '\\' + blacklistedDir);
+                if (directory == s2)
                     return;
             }
 

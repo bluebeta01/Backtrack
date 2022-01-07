@@ -25,9 +25,15 @@ namespace BackTrack
             aes.IV = iv;
 
             Archive archive = new Archive(configuration.archive_directory, aes);
+            archive.archivingEvent += OnArchivingFile;
             archiver = new Archiver(configuration, manifest, archive);
             Manifest newManifest = archiver.ArchiveDirectories();
             newManifest.Save(configuration.manifest_directory);
+        }
+
+        private static void OnArchivingFile(object sender, string file)
+        {
+            Console.WriteLine("Archiving File: " + file);
         }
     }
 }

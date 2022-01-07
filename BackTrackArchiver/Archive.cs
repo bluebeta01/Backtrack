@@ -14,6 +14,9 @@ namespace BackTrackArchiver
         public Aes aes;
         public List<string> archiveFiles = new List<string>();
         public uint nextFileIndex = 0;
+        public Guid guid = Guid.NewGuid();
+        public event EventHandler<string> archivingEvent;
+        public event EventHandler<ArchivingFailedEventArgs> archivingFailedEvent;
 
         public Archive(string directory, Aes aes)
         {
@@ -25,8 +28,9 @@ namespace BackTrackArchiver
         public void ArchiveFiles(string[] addedFiles, string[] removedFiles)
         {
             ArchiveFile archiveFile = new ArchiveFile();
-            string archiveFileName = directory + "/" + nextFileIndex + ".bta";
-            archiveFile.Create(archiveFileName, nextFileIndex, aes, addedFiles, removedFiles);
+            //TODO: We should be able to open the file even if it isn't named by the index number
+            string archiveFileName = directory + '\\' + nextFileIndex + ".bta";
+            archiveFile.Create(archiveFileName, nextFileIndex, aes, addedFiles, removedFiles, guid, archivingEvent, archivingFailedEvent);
             archiveFile.Close();
         }
 
@@ -38,7 +42,8 @@ namespace BackTrackArchiver
         public FileTableEntry[] ListFilesInArchive(int archiveIndex)
         {
             ArchiveFile archiveFile = new ArchiveFile();
-            string archiveFileName = directory + "/" + archiveIndex + ".bta";
+            //TODO: We should be able to open the file even if it isn't named by the index number
+            string archiveFileName = directory + '\\' + archiveIndex + ".bta";
             archiveFile.Open(archiveFileName, true, aes);
             FileTableEntry[] files = archiveFile.fileTable.ToArray();
             archiveFile.Close();
@@ -49,25 +54,21 @@ namespace BackTrackArchiver
         {
             foreach(string file in Directory.GetFiles(directory))
             {
-                BinaryReader reader;
                 try
                 {
-                    reader = new BinaryReader(File.Open(file, FileMode.Open));
+                    BinaryReader reader = new BinaryReader(File.Open(file, FileMode.Open));
+                    BtaHeader header = new BtaHeader();
+                    header.Read(reader);
+                    archiveFiles.Add(file);
+                    guid = header.guid;
+                    if (header.index >= nextFileIndex)
+                        nextFileIndex = header.index + 1;
+                    reader.Close();
                 }
-                catch (Exception e)
+                catch (Exception)
                 {
                     continue;
                 }
-                uint magic = reader.ReadUInt32();
-                if (magic == 0x46415442)
-                {
-                    archiveFiles.Add(file);
-                    reader.BaseStream.Seek(28, SeekOrigin.Begin);
-                    uint index = reader.ReadUInt32();
-                    if (index >= nextFileIndex)
-                        nextFileIndex = index + 1;
-                }
-                reader.Close();
             }
         }
     }

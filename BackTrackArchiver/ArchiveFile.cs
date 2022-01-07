@@ -20,30 +20,44 @@ namespace BackTrackArchiver
         public Aes aes;
         SHA256 sha = SHA256.Create();
 
-        public void Create(string filePath, uint index, Aes aes, string[] addedFiles, string[] removedFiles)
+        public void Create(string filePath, uint index, Aes aes, string[] addedFiles, string[] removedFiles,
+            Guid guid, EventHandler<string> archivingEventHandler, EventHandler<ArchivingFailedEventArgs> archivingFailedHandler)
         {
             this.filePath = filePath;
             this.aes = aes;
-            header.index = index;
 
             fileStream = File.Create(filePath);
             fileStream.Seek(BtaHeader.headerSize, SeekOrigin.Begin);
             BinaryWriter binaryWriter = new BinaryWriter(fileStream);
 
-            
 
-            MemoryStream memStream = new MemoryStream();
-            BinaryWriter memBinaryWriter = new BinaryWriter(memStream);
-            foreach (string removedFile in removedFiles)
-                memBinaryWriter.Write(removedFile);
-            memBinaryWriter.Flush();
-            byte[] removedFilesEncrypted = AesCoder.encodeBytes(memStream.ToArray(), aes.Key, aes.IV);
-
-
-            foreach(string addedFile in addedFiles)
+            byte[] removedFilesEncrypted;
+            using (MemoryStream memStream = new MemoryStream())
             {
-                Console.WriteLine("Archving File: " + addedFile);
-                BinaryReader reader = new BinaryReader(File.OpenRead(addedFile));
+                using (BinaryWriter memBinaryWriter = new BinaryWriter(memStream))
+                {
+                    foreach (string removedFile in removedFiles)
+                        memBinaryWriter.Write(removedFile);
+                    memBinaryWriter.Flush();
+                    removedFilesEncrypted = AesCoder.encodeBytes(memStream.ToArray(), aes.Key, aes.IV);
+                }
+            }
+            
+            foreach (string addedFile in addedFiles)
+            {
+                archivingEventHandler(this, addedFile);
+                BinaryReader reader;
+                try
+                {
+                    reader = new BinaryReader(File.OpenRead(addedFile));
+                }
+                catch(Exception ex)
+                {
+                    ArchivingFailedEventArgs args = new ArchivingFailedEventArgs();
+                    args.fileName = addedFile;
+                    args.message = ex.Message;
+                    continue;
+                }
                 FileTableEntry entry = new FileTableEntry();
                 entry.name = addedFile;
                 entry.lastModified = DateTimeToEpochTime(File.GetLastWriteTimeUtc(addedFile));
@@ -51,7 +65,8 @@ namespace BackTrackArchiver
                 entry.offset = (ulong)binaryWriter.BaseStream.Position;
                 fileTable.Add(entry);
 
-                while(reader.BaseStream.Position < reader.BaseStream.Length)
+
+                while (reader.BaseStream.Position < reader.BaseStream.Length)
                 {
                     MemoryStream compressedMemStream = new MemoryStream();
                     GZipStream compressionStream = new GZipStream(compressedMemStream, CompressionLevel.Optimal);
@@ -69,26 +84,30 @@ namespace BackTrackArchiver
 
             binaryWriter.Flush();
 
-            memStream = new MemoryStream();
-            memBinaryWriter = new BinaryWriter(memStream);
-            foreach(FileTableEntry entry in fileTable)
+            byte[] encryptedFileTable;
+            using (MemoryStream memStream = new MemoryStream())
+            using (BinaryWriter memBinaryWriter = new BinaryWriter(memStream))
             {
-                memBinaryWriter.Write(entry.name);
-                memBinaryWriter.Write(entry.encryptedSize);
-                memBinaryWriter.Write(entry.compressedSize);
-                memBinaryWriter.Write(entry.uncompresedSize);
-                memBinaryWriter.Write(entry.lastModified);
-                memBinaryWriter.Write(entry.offset);
+                foreach (FileTableEntry entry in fileTable)
+                {
+                    memBinaryWriter.Write(entry.name);
+                    memBinaryWriter.Write(entry.encryptedSize);
+                    memBinaryWriter.Write(entry.compressedSize);
+                    memBinaryWriter.Write(entry.uncompresedSize);
+                    memBinaryWriter.Write(entry.lastModified);
+                    memBinaryWriter.Write(entry.offset);
+                }
+                memBinaryWriter.Flush();
+                encryptedFileTable = AesCoder.encodeBytes(memStream.ToArray(), aes.Key, aes.IV);
             }
-            memBinaryWriter.Flush();
-            byte[] encryptedFileTable = AesCoder.encodeBytes(memStream.ToArray(), aes.Key, aes.IV);
+            
             long fileTableOffset = binaryWriter.BaseStream.Position;
             binaryWriter.Write(encryptedFileTable);
             long removedFilesOffset = binaryWriter.BaseStream.Position;
             binaryWriter.Write(removedFilesEncrypted);
 
 
-            //TODO: Set the guid to a passed in guid
+            header.guid = guid;
             header.epochTime = DateTimeToEpochTime(DateTime.UtcNow);
             header.index = index;
             header.version = 1;
@@ -117,14 +136,12 @@ namespace BackTrackArchiver
             fileStream = File.Open(filePath, FileMode.Open);
             BinaryReader binaryReader = new BinaryReader(fileStream);
             header.Read(binaryReader);
-            if (!header.Validate())
-                throw new Exception("Not a valid archive file");
 
             byte[] keyHash = GenerateKeyHash();
             for(int i = 0; i < 32; i++)
             {
                 if (keyHash[i] != header.aesKeyHash[i])
-                    throw new Exception("Bad encryption key");
+                    throw new IncorrectKeyException();
             }
 
             decryptRemovedFiles();
@@ -173,7 +190,7 @@ namespace BackTrackArchiver
             }
         }
 
-        public void extractFile(string sourcePath, string destinationPath)
+        public void ExtractFile(string sourcePath, string destinationPath)
         {
             //Must be a multiple of 16 so we are sure not to decrypt a partial block
             ulong chunkSize = 16 * 1000000;
@@ -182,32 +199,32 @@ namespace BackTrackArchiver
                 if(entry.name == sourcePath)
                 {
                     BinaryReader binaryReader = new BinaryReader(fileStream);
-                    FileStream destFileStream = File.Create(destinationPath);
-                    fileStream.Seek((long)entry.offset, SeekOrigin.Begin);
-                    ulong bytesRead = 0;
-                    while(bytesRead < entry.encryptedSize)
+                    using (FileStream destFileStream = File.Create(destinationPath))
                     {
-                        MemoryStream encryptedCompressedStream = new MemoryStream();
-                        ulong bytesLeftToRead = entry.encryptedSize - bytesRead;
-                        byte[] encryptedCompressedData;
-
-                        if (bytesLeftToRead < chunkSize)
+                        fileStream.Seek((long)entry.offset, SeekOrigin.Begin);
+                        ulong bytesRead = 0;
+                        while (bytesRead < entry.encryptedSize)
                         {
-                            encryptedCompressedData = binaryReader.ReadBytes((int)bytesLeftToRead);
-                            bytesRead += bytesLeftToRead;
-                        }
-                        else
-                        {
-                            encryptedCompressedData = binaryReader.ReadBytes((int)chunkSize);
-                            bytesRead += chunkSize;
-                        }
+                            ulong bytesLeftToRead = entry.encryptedSize - bytesRead;
+                            byte[] encryptedCompressedData;
 
-                        MemoryStream compressedStream = AesCoder.decodeBytes(encryptedCompressedData, aes.Key, aes.IV);
-                        GZipStream decompressedStream = new GZipStream(compressedStream, CompressionMode.Decompress);
-                        decompressedStream.CopyTo(destFileStream);
-                        decompressedStream.Dispose();
+                            if (bytesLeftToRead < chunkSize)
+                            {
+                                encryptedCompressedData = binaryReader.ReadBytes((int)bytesLeftToRead);
+                                bytesRead += bytesLeftToRead;
+                            }
+                            else
+                            {
+                                encryptedCompressedData = binaryReader.ReadBytes((int)chunkSize);
+                                bytesRead += chunkSize;
+                            }
+
+                            using (MemoryStream compressedStream = AesCoder.decodeBytes(encryptedCompressedData, aes.Key, aes.IV))
+                            using (GZipStream decompressedStream = new GZipStream(compressedStream, CompressionMode.Decompress))
+                                decompressedStream.CopyTo(destFileStream);
+                        }
+                        return; 
                     }
-                    return;
                 }
             }
             throw new FileNotFoundException("The specified file is not present in the archive");
@@ -215,8 +232,15 @@ namespace BackTrackArchiver
 
         public void Close()
         {
-            fileStream.Flush();
-            fileStream.Close();
+            try
+            {
+                fileStream.Flush();
+                fileStream.Close();
+            }
+            catch(Exception)
+            {
+
+            }
         }
     }
 }

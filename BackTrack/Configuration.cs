@@ -24,6 +24,7 @@ namespace BackTrack
             {
                 string rawJson = File.ReadAllText(filePath);
                 Configuration config = JsonConvert.DeserializeObject<Configuration>(rawJson);
+                config.FormatPaths();
 
                 return config;
             }
@@ -31,6 +32,19 @@ namespace BackTrack
             {
                 return null;
             }
+        }
+
+        public void FormatPaths()
+        {
+            manifest_directory = Path.GetFullPath(manifest_directory);
+            archive_directory = Path.GetFullPath(archive_directory);
+            log_directory = Path.GetFullPath(log_directory);
+
+            for (int i = 0; i < tracked_directories.Count; i++)
+                tracked_directories[i] = Path.GetFullPath(tracked_directories[i]);
+
+            for(int i = 0; i < blacklisted_directories.Count; i++)
+                blacklisted_directories[i] = blacklisted_directories[i].TrimEnd(new char[] { '\\', '/' });
         }
     }
 }

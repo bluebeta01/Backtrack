@@ -1,2 +1,3 @@
 -Modify bta file format to support optional encryption
--Fix bug where each BTA gets a differnet guid
+-Add exceptions for events in archive lib
+-Catch an issue where BTA files in a directory may have differnt guids

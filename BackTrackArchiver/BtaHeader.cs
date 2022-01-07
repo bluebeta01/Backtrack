@@ -24,6 +24,10 @@ namespace BackTrackArchiver
         public void Read(BinaryReader reader)
         {
             magic = reader.ReadUInt32();
+            
+            if(magic != sMagic)
+                throw new ArchiveInvalidException();
+
             guid = new Guid(reader.ReadBytes(16));
             epochTime = reader.ReadUInt64();
             index = reader.ReadUInt32();

@@ -45,6 +45,9 @@
     <Compile Include="Archive.cs" />
     <Compile Include="ArchiveFile.cs" />
     <Compile Include="BtaHeader.cs" />
+    <Compile Include="Event\ArchivingFailedEventArgs.cs" />
+    <Compile Include="Exception\ArchiveInvalidException.cs" />
+    <Compile Include="Exception\IncorrectKeyException.cs" />
     <Compile Include="FileTableEntry.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
